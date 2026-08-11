@@ -1,0 +1,13 @@
+{
+  "name": "zns-anchor-tests",
+  "private": true,
+  "description": "State-machine tests for PiNSAnchor. Compiles with solc and runs against an in-process EVM, so no external chain or SP1 prover is needed.",
+  "scripts": {
+    "test": "node compile.js && node test.js"
+  },
+  "dependencies": {
+    "solc": "0.8.36",
+    "ethers": "^6",
+    "ganache": "^7"
+  }
+}
