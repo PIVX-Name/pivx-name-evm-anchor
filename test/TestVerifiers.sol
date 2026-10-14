@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.37;
 
 /// @title Test-only SP1 verifier stand-in (NEVER DEPLOY)
 /// @notice Accepts exactly one program key, and only proofs spelling "valid". Lets the

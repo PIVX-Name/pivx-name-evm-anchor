@@ -3,7 +3,7 @@
 // GitHub: https://github.com/PIVX-Name
 
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.36;
+pragma solidity 0.8.37;
 
 /// @notice The official SP1 Verifier Interface standard (sp1-contracts)
 interface ISP1Verifier {
