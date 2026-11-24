@@ -1,5 +1,5 @@
 {
-  "name": "zns-anchor-tests",
+  "name": "pivx-name-anchor-tests",
   "private": true,
   "description": "State-machine tests for PiNSAnchor. Compiles with solc and runs against an in-process EVM, so no external chain or SP1 prover is needed.",
   "scripts": {
@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "solc": "0.8.37",
-    "ethers": "^6",
-    "ganache": "^7"
+    "ethers": "6.17.0",
+    "ganache": "7.9.2"
   }
 }

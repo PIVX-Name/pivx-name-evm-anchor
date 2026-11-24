@@ -152,8 +152,10 @@ the paused state, so recovery cannot race an in-flight commit.
 
 A state-machine suite runs the contract against an in-process EVM, so no chain, funded
 wallet or SP1 prover is needed. It exercises the batch invariants, the timelocked rules
-change and the rollback flow, the event authorisation trail, and genesis from an empty
-tree. Every expected revert is asserted by its custom error name. Stand-in verifiers
+change and the rollback flow, the event authorisation trail, genesis from an empty
+tree, and the remaining guards (pause, ownership, sequencer) and views. Every expected
+revert is asserted by its custom error name, or, where `abi.decode` refuses a value, by
+its empty revert data. Stand-in verifiers
 (`test/TestVerifiers.sol`, test-only) drive the real contract through a rules change, to
 show that an approved change alters nothing before it activates.
 
@@ -163,8 +165,14 @@ after every step compares the current root, tip, height, epoch and the validity 
 root ever seen. A mismatch prints the seed and step; set `FUZZ_SEEDS` and `FUZZ_STEPS` to
 replay or to run longer.
 
+The test packages are pinned to exact versions, and `test/package-lock.json` is
+committed, so `npm ci` installs what the suite was last run with. It needs npm 11: npm 10
+(Node 22's) stops at the macOS-only `fsevents` that ganache's own shrinkwrap lists
+(`EBADPLATFORM`). There, `npm install` installs the same packages and leaves the lock as it
+is.
+
 ```bash
-cd test && npm install && npm test
+cd test && npm ci && npm test
 ```
 
 ---
@@ -185,7 +193,7 @@ embeds a metadata hash of the source in the bytecode, so the `.bin` changes even
 logic does not:
 
 ```bash
-cd test && npm install && node compile.js
+cd test && npm ci && node compile.js
 ```
 
 Then copy `abi` and `evm.bytecode.object` out of `test/artifacts.json` for each contract.

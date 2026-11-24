@@ -29,7 +29,12 @@ const ok = async (p) => { const r = await (await p).wait(); if (r.status !== 1) 
 
 // Set once the chain is up; `reverts` replays against it to learn why a call failed.
 let PROVIDER = null;
-const ERRORS = new ethers.Interface([...A.abi, ...ART["TestVerifiers.sol"].ExpectingVerifier.abi]);
+// The errors only: both ABIs have a constructor, and an Interface given two warns of a
+// duplicate definition.
+const ERRORS = new ethers.Interface([...A.abi, ...EXPECTING.abi].filter((f) => f.type === "error"));
+// The `errName` that stands for a revert carrying no data at all, as abi.decode does when a
+// value does not fit its type - unlike the contract's own custom errors.
+const EMPTY_REVERT = "(a revert with no data)";
 
 // Asserts that a transaction reverted - and, given `errName`, that it reverted with that
 // custom error. Only a revert counts: any other failure (a bad argument, a dropped
@@ -51,6 +56,7 @@ const reverts = async (p, errName) => {
     let name = null;
     try { name = data ? ERRORS.parseError(data)?.name : null; } catch { /* not one of ours */ }
     if (name === errName) return;
+    if (errName === EMPTY_REVERT && data === "0x") return;
     throw new Error("reverted with " + (name ?? data ?? e.shortMessage) + ", expected " + errName);
   }
   throw new Error("the replayed call did not revert");
@@ -497,6 +503,71 @@ const deployReverts = async (p) => {
     };
     const nShallow = await gasToUndo(1), nDeep = await gasToUndo(40);
     if (nDeep !== nShallow) throw new Error("undoing 1 batch cost " + nShallow + " gas, undoing 40 cost " + nDeep);
+  });
+
+  // --- the remaining guards, events and views, on a contract of their own ---
+  //
+  // A fresh deployment, so what these do (a pause, an ownership transfer) cannot
+  // leak into the checks above or below.
+  const g = await deploy(seq.address);
+  await g.waitForDeployment();
+  const GS = g.connect(seq), GX = g.connect(stranger);
+  await check("a height word with bits above 32 is refused by abi.decode", async () => {
+    // The same 96 bytes as a valid publicValues, so the length check lets it through
+    const wide = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes32", "uint256"], [ZERO, R(1), (1n << 32n) + 100n]);
+    await reverts(GS.commitBatch("0x", wide, GAS), EMPTY_REVERT);
+  });
+  await check("RootUpdated carries the old root, the new root and the height", async () => {
+    const r = await (await GS.commitBatch("0x", pv(ZERO, R(1), 100), GAS)).wait();
+    const ev = r.logs.map((l) => { try { return g.interface.parseLog(l); } catch { return null; } })
+      .filter((l) => l && l.name === "RootUpdated");
+    if (ev.length !== 1 || ev[0].args.oldRoot !== ZERO || ev[0].args.newRoot !== R(1) ||
+        Number(ev[0].args.endBlockHeight) !== 100) throw new Error("RootUpdated: " + ev.map((e) => e.args.join()).join(" | "));
+  });
+  await check("the owner commits as fallback sequencer", () => ok(g.commitBatch("0x", pv(R(1), R(2), 101), GAS)));
+  await check("verifyRootValidity(genesis) is (true, genesis height)", async () => {
+    const [found, h] = await g.verifyRootValidity(ZERO);
+    if (!found || Number(h) !== 99) throw new Error(found + " " + h);
+  });
+  await check("verifyRootValidity(unknown root) is (false, 0)", async () => {
+    const [found, h] = await g.verifyRootValidity(R(777));
+    if (found || Number(h) !== 0) throw new Error(found + " " + h);
+  });
+  await check("a stranger cannot pause", () => reverts(GX.pause(GAS), "Unauthorized"));
+  await check("the sequencer cannot pause", () => reverts(GS.pause(GAS), "Unauthorized"));
+  await check("unpause while running reverts", () => reverts(g.unpause(GAS), "ExpectedPause"));
+  await check("pausing twice reverts", async () => {
+    await ok(g.pause(GAS));
+    await reverts(g.pause(GAS), "EnforcedPause");
+  });
+  await check("approving a rollback with none proposed reverts", () => reverts(g.approveRootRollback(R(1), GAS), "NoPendingProposal"));
+  await check("approving a rollback to another root reverts", async () => {
+    await ok(GS.proposeRootRollback(R(1), GAS));
+    await reverts(g.approveRootRollback(ZERO, GAS), "ProposalMismatch");
+  });
+  await check("the sequencer cannot approve its own rollback", () => reverts(GS.approveRootRollback(R(1), GAS), "Unauthorized"));
+  await check("a stranger cannot reject a rollback", () => reverts(GX.revertRootRollback(GAS), "Unauthorized"));
+  await check("the owner rejects a rollback, which clears it", async () => {
+    await ok(g.revertRootRollback(GAS));
+    if (await g.pendingRollbackRoot() !== ZERO) throw new Error("the proposal is still pending");
+  });
+  await check("rejecting a rollback with none proposed reverts", () => reverts(g.revertRootRollback(GAS), "NoPendingProposal"));
+  await check("a rules change can be proposed while paused", () => ok(GS.proposeRulesChange(VK(2), V2, GAS)));
+  await check("the sequencer cannot reject a rules change", () => reverts(GS.revertRulesChange(GAS), "Unauthorized"));
+  await check("ownership cannot be offered to the zero address", () => reverts(g.transferOwnership(ethers.ZeroAddress, GAS), "InvalidAddress"));
+  await check("the sequencer cannot be set to the zero address", () => reverts(g.updateSequencer(ethers.ZeroAddress, GAS), "InvalidAddress"));
+  await check("a stranger cannot set the sequencer", () => reverts(GX.updateSequencer(stranger.address, GAS), "Unauthorized"));
+  await check("the old owner loses its rights once ownership is accepted", async () => {
+    await ok(g.unpause(GAS));
+    await ok(g.transferOwnership(stranger.address, GAS));
+    await ok(GX.acceptOwnership(GAS));
+    await reverts(g.pause(GAS), "Unauthorized");
+    await reverts(g.commitBatch("0x", pv(R(2), R(3), 102), GAS), "NotSequencer");
+  });
+  await check("the new owner commits as fallback sequencer", () => ok(GX.commitBatch("0x", pv(R(2), R(3), 102), GAS)));
+  await check("tipIndex and rootAt agree after the commits", async () => {
+    const tip = Number(await g.tipIndex());
+    if (tip !== 3 || await g.rootAt(3) !== R(3) || await g.rootAt(0) !== ZERO) throw new Error("tipIndex " + tip);
   });
 
   // --- the real anchor, not the mock: batches are checked against the rules in force ---
